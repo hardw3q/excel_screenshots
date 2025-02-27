@@ -104,7 +104,7 @@ export default {
       formData.append('file', this.selectedFile);
 
       try {
-        const { data } = await axios.post('http://localhost:3000/tasks/upload', formData, {
+        const { data } = await axios.post('https://api.screenshots.pixelservices.ru/tasks/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
@@ -121,7 +121,7 @@ export default {
 
     async fetchTasks() {
       try {
-        const { data } = await axios.get(`http://localhost:3000/tasks`);
+        const { data } = await axios.get(`https://api.screenshots.pixelservices.ru/tasks`);
         this.tasks = data;
         console.log(data)
       } catch (error) {
