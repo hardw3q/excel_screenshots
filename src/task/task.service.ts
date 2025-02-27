@@ -3,6 +3,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import * as puppeteer from 'puppeteer';
 import * as archiver from 'archiver';
+import * as transliteration from 'transliteration';
+import { v4 as uuidv4 } from 'uuid';
+import { NodeHttpHandler } from "@aws-sdk/node-http-handler";
+
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { InjectModel } from '@nestjs/sequelize';
@@ -25,12 +29,17 @@ export class TaskService {
     ) {
         this.s3Client = new S3Client({
             region: 'ru-1',
-            endpoint: 'https://s3.timeweb.com',
+            endpoint: 'https://s3.timeweb.cloud',
             forcePathStyle: true,
             credentials: {
                 accessKeyId: process.env.S3_ACCESS_KEY!,
                 secretAccessKey: process.env.S3_SECRET_KEY!,
             },
+            requestHandler: new NodeHttpHandler({
+                connectionTimeout: 3000,
+                requestTimeout: 10000,
+            }),
+            maxAttempts: 3,
         });
     }
 
@@ -97,7 +106,7 @@ export class TaskService {
     private async readUrlsFromExcel(buffer: Buffer): Promise<string[]> {
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.load(buffer);
-        const worksheet = workbook.worksheets[1];
+        const worksheet = workbook.worksheets[0];
         const urls: string[] = [];
 
         worksheet.eachRow((row, rowNumber) => {
@@ -187,38 +196,29 @@ export class TaskService {
             archive.finalize();
         });
     }
-
     private async uploadToS3(filePath: string): Promise<string> {
-        return new Promise((resolve, reject) => {
-            const fileStream = fs.createReadStream(filePath);
-            const key = `screenshots-${Date.now()}.zip`;
+        const fileBuffer = await fs.promises.readFile(filePath);
+        const key = `${uuidv4()}_${Date.now()}.zip`;
 
-            // Обработка ошибок чтения файла
-            fileStream.on('error', (err) => {
-                console.error('File read error:', err);
-                reject(new Error('Failed to read file'));
-            });
-
-            const uploadCommand = new PutObjectCommand({
-                Bucket: process.env.S3_BUCKET!,
-                Key: key,
-                Body: fileStream,
-                ContentType: 'application/zip',
-            });
-
-            this.s3Client.send(uploadCommand)
-                .then((data) => {
-                    console.log('S3 upload success:', data);
-                    resolve(key);
-                })
-                .catch((error) => {
-                    console.error('S3 upload error:', {
-                        code: error.$metadata?.httpStatusCode,
-                        message: error.message,
-                        raw: error.$response?.body?.toString(),
-                    });
-                    reject(new Error('Failed to upload to S3'));
-                });
+        const uploadCommand = new PutObjectCommand({
+            Bucket: process.env.S3_BUCKET!,
+            Key: key,
+            Body: fileBuffer,
+            ContentType: 'application/zip',
         });
+
+        try {
+            const response = await this.s3Client.send(uploadCommand);
+            console.log('S3 upload success:', response);
+            return key;
+        } catch (error) {
+            console.error('S3 upload error:', {
+                statusCode: error.$metadata?.httpStatusCode,
+                message: error.message,
+                rawResponse: error.$response?.body?.toString(),
+                errorDetails: error,
+            });
+            throw new Error('Failed to upload to S3. Check server logs for details.');
+        }
     }
 }
