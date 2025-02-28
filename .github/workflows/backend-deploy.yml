@@ -3,7 +3,7 @@ name: Backend Deployment
 on:
   push:
     branches:
-      - backend
+      - main
   workflow_dispatch:
 
 jobs:
