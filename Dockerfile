@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y \
     libxtst6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Создание символической ссылки после установки пакетов
-RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
+# Создание символической ссылки: делаем /usr/bin/chromium указывающим на /usr/bin/chromium-browser
+RUN ln -sf /usr/bin/chromium-browser /usr/bin/chromium
 
 # Рабочая директория
 WORKDIR /app
@@ -32,7 +32,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY nest-cli.json ./
 
-# Установка зависимостей (без исключения dev-зависимостей)
+# Установка зависимостей (устанавливаем и dev-зависимости для сборки)
 RUN npm ci --ignore-scripts
 
 # Установка NestJS CLI глобально для сборки
@@ -69,12 +69,12 @@ RUN apt-get update && apt-get install -y \
     libxtst6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Создание символической ссылки после установки пакетов
-RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
+# Создание символической ссылки для runtime-окружения
+RUN ln -sf /usr/bin/chromium-browser /usr/bin/chromium
 
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Создаем непривилегированного пользователя
