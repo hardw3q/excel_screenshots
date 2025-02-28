@@ -48,7 +48,6 @@ WORKDIR /app
 
 # Копируем зависимости
 COPY package*.json ./
-COPY prisma ./prisma/
 
 # Установка зависимостей
 RUN npm ci --quiet
@@ -74,7 +73,6 @@ WORKDIR /home/appuser/app
 COPY --from=builder --chown=appuser:appuser /app/node_modules ./node_modules
 COPY --from=builder --chown=appuser:appuser /app/package*.json ./
 COPY --from=builder --chown=appuser:appuser /app/dist ./dist
-COPY --from=builder --chown=appuser:appuser /app/prisma ./prisma
 
 USER appuser
 
