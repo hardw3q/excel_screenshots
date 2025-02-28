@@ -1,32 +1,14 @@
-# Базовый образ с Node.js
+# Базовый образ для сборки
 FROM node:20-bookworm-slim AS builder
 
-# Установка зависимостей для Puppeteer и системных утилит
+# Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     chromium \
     fonts-liberation \
-    libappindicator3-1 \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libc6 \
-    libcairo2 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libfontconfig1 \
-    libgbm1 \
-    libgcc1 \
     libglib2.0-0 \
-    libgtk-3-0 \
-    libnspr4 \
     libnss3 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libstdc++6 \
     libx11-6 \
-    libx11-xcb1 \
     libxcb1 \
     libxcomposite1 \
     libxcursor1 \
@@ -38,10 +20,8 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    lsb-release \
-    wget \
-    xdg-utils \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/chromium /usr/bin/chromium-browser
 
 # Рабочая директория
 WORKDIR /app
@@ -50,7 +30,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Установка зависимостей
-RUN npm ci --quiet
+RUN npm ci --omit=dev --ignore-scripts
 
 # Копируем исходный код
 COPY . .
@@ -61,15 +41,36 @@ RUN npm run build
 # Финальный образ
 FROM node:20-bookworm-slim
 
+# Установка runtime зависимостей
+RUN apt-get update && apt-get install -y \
+    chromium \
+    libglib2.0-0 \
+    libnss3 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxi6 \
+    libxrandr2 \
+    libxrender1 \
+    libxss1 \
+    libxtst6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/chromium /usr/bin/chromium-browser
+
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 # Создаем непривилегированного пользователя
 RUN useradd -m appuser
 WORKDIR /home/appuser/app
 
-# Копируем зависимости и билд
+# Копируем артефакты сборки
 COPY --from=builder --chown=appuser:appuser /app/node_modules ./node_modules
 COPY --from=builder --chown=appuser:appuser /app/package*.json ./
 COPY --from=builder --chown=appuser:appuser /app/dist ./dist
