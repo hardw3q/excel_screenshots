@@ -104,7 +104,7 @@ export default {
       formData.append('file', this.selectedFile);
 
       try {
-        const { data } = await axios.post('http://95.79.121.141:3020/tasks/upload', formData, {
+        const { data } = await axios.post('https://hardw3q-excel-screenshots-ac04.twc1.net/tasks/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
@@ -121,7 +121,7 @@ export default {
 
     async fetchTasks() {
       try {
-        const { data } = await axios.get(`http://95.79.121.141:3020/tasks`);
+        const { data } = await axios.get(`https://hardw3q-excel-screenshots-ac04.twc1.net/tasks`);
         this.tasks = data;
         console.log(data)
       } catch (error) {
