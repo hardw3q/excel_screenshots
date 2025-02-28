@@ -164,6 +164,7 @@ export class TaskService {
                     console.log(screenshotPath);
 
                     screenshots.push(screenshotPath);
+                    await new Promise(resolve => setTimeout(resolve, 5000));
                 } catch (err) {
                     console.error(`Error processing ${url}: ${err.message}`);
                 }
