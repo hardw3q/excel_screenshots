@@ -104,7 +104,7 @@ export default {
       formData.append('file', this.selectedFile);
 
       try {
-        const { data } = await axios.post('https://api.screenshots.pixelservices.ru/tasks/upload', formData, {
+        const { data } = await axios.post('http://95.79.121.141:3020/tasks/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
@@ -121,7 +121,7 @@ export default {
 
     async fetchTasks() {
       try {
-        const { data } = await axios.get(`https://api.screenshots.pixelservices.ru/tasks`);
+        const { data } = await axios.get(`http://95.79.121.141:3020/tasks`);
         this.tasks = data;
         console.log(data)
       } catch (error) {
