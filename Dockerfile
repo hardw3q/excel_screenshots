@@ -21,13 +21,15 @@ RUN apt-get update && apt-get install -y \
     libxss1 \
     libxtst6 \
     && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/bin/chromium /usr/bin/chromium-browser
+    && ln -s /usr/bin/chromium /usr/bin/chromium-browser \
+
 
 # Рабочая директория
 WORKDIR /app
 
 # Копируем зависимости
 COPY package*.json ./
+COPY nest-cli.json ./
 
 # Установка зависимостей
 RUN npm ci --omit=dev --ignore-scripts
