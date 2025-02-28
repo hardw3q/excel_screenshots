@@ -32,17 +32,20 @@ WORKDIR /app
 COPY package*.json ./
 COPY nest-cli.json ./
 
-# Установка зависимостей
-RUN npm ci --omit=dev --ignore-scripts
+# Установка зависимостей (без исключения dev-зависимостей)
+RUN npm ci --ignore-scripts
 
 # Установка NestJS CLI глобально для сборки
-RUN npm install -g @nestjs/cli @types/multer
+RUN npm install -g @nestjs/cli
 
 # Копируем исходный код
 COPY . .
 
 # Сборка приложения
 RUN npm run build
+
+# Удаление dev-зависимостей после сборки
+RUN npm prune --production
 
 # Финальный образ
 FROM node:20-bookworm-slim
