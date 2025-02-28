@@ -104,7 +104,7 @@ export default {
       formData.append('file', this.selectedFile);
 
       try {
-        const { data } = await axios.post('https://hardw3q-excel-screenshots-ac04.twc1.net/tasks/upload', formData, {
+        const { data } = await axios.post('https://lk.nncsm.ru/screenshots/tasks/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
@@ -121,7 +121,7 @@ export default {
 
     async fetchTasks() {
       try {
-        const { data } = await axios.get(`https://hardw3q-excel-screenshots-ac04.twc1.net/tasks`);
+        const { data } = await axios.get(`https://lk.nncsm.ru/screenshots/tasks`);
         this.tasks = data;
         console.log(data)
       } catch (error) {
