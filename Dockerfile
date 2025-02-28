@@ -20,9 +20,10 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/bin/chromium /usr/bin/chromium-browser \
+    && rm -rf /var/lib/apt/lists/*
 
+# Создание символической ссылки после установки пакетов
+RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
 
 # Рабочая директория
 WORKDIR /app
@@ -60,8 +61,10 @@ RUN apt-get update && apt-get install -y \
     libxrender1 \
     libxss1 \
     libxtst6 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -s /usr/bin/chromium /usr/bin/chromium-browser
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание символической ссылки после установки пакетов
+RUN ln -sf /usr/bin/chromium /usr/bin/chromium-browser
 
 ENV NODE_ENV=production
 ENV PORT=3000
