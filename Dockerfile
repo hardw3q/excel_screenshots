@@ -35,6 +35,9 @@ COPY nest-cli.json ./
 # Установка зависимостей
 RUN npm ci --omit=dev --ignore-scripts
 
+# Установка NestJS CLI глобально для сборки
+RUN npm install -g @nestjs/cli
+
 # Копируем исходный код
 COPY . .
 
