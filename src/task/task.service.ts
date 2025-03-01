@@ -128,8 +128,8 @@ export class TaskService {
         const MAX_ATTEMPTS = 3;
         const INITIAL_TIMEOUT = 30000;
         const TIMEOUT_MULTIPLIER = 2;
-        const BASE_DELAY = 5000;
-        const JITTER = 2000;
+        const BASE_DELAY = 2000;
+        const JITTER = 3000;
 
         let browser: puppeteer.Browser;
         const screenshots: string[] = [];
