@@ -56,4 +56,8 @@ export class TaskController {
     async getAllTasks(): Promise<Task[]> {
         return this.taskService.getAllTasks();
     }
+    @Get('/byId/:id')
+    async getTask(@Param('id') id: string) {
+        return this.taskService.getTask(+id);
+    }
 }

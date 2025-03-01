@@ -5,8 +5,7 @@ import * as puppeteer from 'puppeteer';
 import * as archiver from 'archiver';
 import * as transliteration from 'transliteration';
 import { v4 as uuidv4 } from 'uuid';
-import { NodeHttpHandler } from "@aws-sdk/node-http-handler";
-
+import { NodeHttpHandler } from '@aws-sdk/node-http-handler';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { InjectModel } from '@nestjs/sequelize';
@@ -14,7 +13,7 @@ import { Task } from './task.model';
 import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
-import { Readable } from 'stream';
+import { URL } from 'url';
 
 const mkdir = promisify(fs.mkdir);
 const rm = promisify(fs.rm);
@@ -22,6 +21,12 @@ const rm = promisify(fs.rm);
 @Injectable()
 export class TaskService {
     private s3Client: S3Client;
+    private circuitBreakerState = {
+        isOpen: false,
+        lastFailure: 0,
+        resetTimeout: 60000,
+        failureCount: 0
+    };
 
     constructor(
         @InjectModel(Task)
@@ -53,28 +58,19 @@ export class TaskService {
             const tempDir = path.join(__dirname, 'temp', task.id.toString());
             await mkdir(tempDir, { recursive: true });
 
-            // Шаг 1: Чтение URL из Excel
             const urls = await this.readUrlsFromExcel(file.buffer);
-
-            // Шаг 2: Создание скриншотов
-            const screenshots = await this.createScreenshots(urls, tempDir);
-
-            // Шаг 3: Создание ZIP-архива
+            await task.update({ urlsCount: urls.length });
+            const screenshots = await this.createScreenshots(urls, tempDir, task);
             const zipPath = await this.createZip(screenshots, tempDir);
-            console.log(zipPath);
-            // Шаг 4: Загрузка в S3
             const s3Key = await this.uploadToS3(zipPath);
 
-            // Обновление статуса задачи
             await task.update({
                 status: 'completed',
                 s3Key,
                 processedAt: new Date(),
             });
 
-            // Очистка временных файлов
             await rm(tempDir, { recursive: true });
-
             return task;
         } catch (error) {
             await task.update({ status: 'failed' });
@@ -87,7 +83,6 @@ export class TaskService {
         if (!task) {
             throw new NotFoundException('File not found');
         }
-
 
         const command = new GetObjectCommand({
             Bucket: process.env.S3_BUCKET!,
@@ -110,14 +105,12 @@ export class TaskService {
         const urls: string[] = [];
 
         worksheet.eachRow((row, rowNumber) => {
-            // console.log(row)
-            if (rowNumber === 1) return; // Пропуск заголовка
+            if (rowNumber === 1) return;
             const urlCell = row.getCell(1);
             if (urlCell.type === ExcelJS.ValueType.String) {
                 urls.push(urlCell.text.trim());
             }
         });
-
 
         return urls.filter(url => this.validateUrl(url));
     }
@@ -131,63 +124,220 @@ export class TaskService {
         }
     }
 
-    private async createScreenshots(urls: string[], outputDir: string): Promise<string[]> {
-        const browser = await puppeteer.launch({
+    private async createScreenshots(urls: string[], outputDir: string, task: Task): Promise<string[]> {
+        const MAX_ATTEMPTS = 3;
+        const INITIAL_TIMEOUT = 30000;
+        const TIMEOUT_MULTIPLIER = 2;
+        const BASE_DELAY = 5000;
+        const JITTER = 2000;
+
+        let browser: puppeteer.Browser;
+        const screenshots: string[] = [];
+
+        try {
+            browser = await this.launchBrowser();
+            const queue = this.createQueue(urls, INITIAL_TIMEOUT);
+
+            while (queue.length > 0) {
+                if (this.checkCircuitBreaker()) {
+                    throw new Error('Service unavailable due to recent errors');
+                }
+
+                const item = queue.shift()!;
+                let page: puppeteer.Page | null = null;
+
+                try {
+                    page = await browser.newPage();
+                    await this.configurePage(page);
+
+                    console.log(`Processing ${item.url} (attempt ${item.attempts + 1}/${MAX_ATTEMPTS})`);
+
+                    const response = await this.navigatePage(page, item.url, item.timeout);
+                    this.validateResponse(response);
+
+                    const screenshotPath = await this.takeScreenshot(page, outputDir, item.url, screenshots.length);
+                    screenshots.push(screenshotPath);
+                    await task.increment('completed');
+                    this.resetCircuitBreaker();
+                    item.timeout = INITIAL_TIMEOUT;
+                    await this.randomDelay(BASE_DELAY, JITTER);
+
+                } catch (error) {
+                    await this.handleError(error, item, queue, MAX_ATTEMPTS, TIMEOUT_MULTIPLIER);
+                    this.updateCircuitBreaker();
+
+                    if (this.isFatalError(error)) {
+                        browser = await this.restartBrowser(browser);
+                    }
+                } finally {
+                    if (page && !page.isClosed()) {
+                        await page.close();
+                    }
+                }
+            }
+
+            return screenshots;
+        } finally {
+            // @ts-ignore
+            if (browser) {
+                await browser.close();
+            }
+        }
+    }
+
+
+    private async launchBrowser(): Promise<puppeteer.Browser> {
+        return puppeteer.launch({
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu'
             ],
         });
-
-        const screenshots: string[] = [];
-
-        try {
-            for (const [index, url] of urls.entries()) {
-                try {
-                    const page = await browser.newPage();
-                    await page.setViewport({ width: 1280, height: 720 });
-
-                    // Настройка таймаута
-                    await page.goto(url, {
-                        waitUntil: 'networkidle2',
-                        timeout: 30000
-                    });
-
-                    const screenshotPath = path.join(outputDir, `${index + 1}.png`);
-                    await page.screenshot({
-                        path: screenshotPath,
-                        fullPage: true,
-                        type: 'png',
-                        // quality: 80,
-                    });
-                    console.log(screenshotPath);
-
-                    screenshots.push(screenshotPath);
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-                } catch (err) {
-                    console.error(`Error processing ${url}: ${err.message}`);
-                }
-            }
-        } finally {
-            await browser.close();
-        }
-
-        return screenshots;
     }
 
+    private createQueue(urls: string[], initialTimeout: number): Array<{ url: string; attempts: number; timeout: number }> {
+        return urls.map(url => ({
+            url,
+            attempts: 0,
+            timeout: initialTimeout
+        }));
+    }
+
+    private async configurePage(page: puppeteer.Page): Promise<void> {
+        await page.setViewport({ width: 1280, height: 720 });
+        await page.setJavaScriptEnabled(true);
+        await page.setRequestInterception(true);
+
+        page.on('request', (req) => {
+            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+    }
+
+    private async navigatePage(page: puppeteer.Page, url: string, timeout: number): Promise<puppeteer.HTTPResponse | null> {
+        return page.goto(url, {
+            waitUntil: 'networkidle2',
+            timeout,
+        });
+    }
+
+    private validateResponse(response: puppeteer.HTTPResponse | null): void {
+        if (response && response.status() >= 400) {
+            throw new Error(`HTTP Error ${response.status()}`);
+        }
+    }
+
+    private async takeScreenshot(
+        page: puppeteer.Page,
+        outputDir: string,
+        url: string,
+        index: number
+    ): Promise<string> {
+        const filename = this.generateFilename(url, index + 1);
+        const screenshotPath = path.join(outputDir, filename);
+
+        await page.screenshot({
+            path: screenshotPath,
+            fullPage: true,
+            type: 'png',
+            captureBeyondViewport: true,
+        });
+
+        console.log(`Screenshot saved: ${screenshotPath}`);
+        return screenshotPath;
+    }
+
+    private generateFilename(url: string, index: number): string {
+        try {
+            const parsedUrl = new URL(url);
+            const hostname = transliteration.slugify(parsedUrl.hostname);
+            return `${index}_${hostname}_${Date.now()}.png`;
+        } catch {
+            return `${index}_${Date.now()}.png`;
+        }
+    }
+
+    private async handleError(
+        error: Error,
+        item: { url: string; attempts: number; timeout: number },
+        queue: Array<{ url: string; attempts: number; timeout: number }>,
+        maxAttempts: number,
+        timeoutMultiplier: number
+    ): Promise<void> {
+        console.error(`Attempt ${item.attempts + 1} failed for ${item.url}: ${error.message}`);
+
+        if (item.attempts < maxAttempts - 1) {
+            item.attempts++;
+            item.timeout *= timeoutMultiplier;
+            queue.push(item);
+            console.log(`Requeued: ${item.url} (new timeout: ${item.timeout}ms)`);
+        } else {
+            console.error(`Max attempts reached for: ${item.url}`);
+        }
+    }
+
+    private async randomDelay(base: number, jitter: number): Promise<void> {
+        const delay = base + Math.random() * jitter;
+        await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    private isFatalError(error: Error): boolean {
+        const fatalMessages = [
+            'Protocol error',
+            'Session closed',
+            'Navigation failed',
+            'Target closed'
+        ];
+        return fatalMessages.some(msg => error.message.includes(msg));
+    }
+
+    private async restartBrowser(oldBrowser: puppeteer.Browser): Promise<puppeteer.Browser> {
+        console.log('Restarting browser...');
+        await oldBrowser.close();
+        return this.launchBrowser();
+    }
+
+    private checkCircuitBreaker(): boolean {
+        if (this.circuitBreakerState.isOpen) {
+            if (Date.now() - this.circuitBreakerState.lastFailure > this.circuitBreakerState.resetTimeout) {
+                this.circuitBreakerState.isOpen = false;
+                this.circuitBreakerState.failureCount = 0;
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private resetCircuitBreaker(): void {
+        this.circuitBreakerState.failureCount = 0;
+    }
+
+    private updateCircuitBreaker(): void {
+        this.circuitBreakerState.failureCount++;
+        if (this.circuitBreakerState.failureCount > 5) {
+            this.circuitBreakerState.isOpen = true;
+            this.circuitBreakerState.lastFailure = Date.now();
+            console.error('Circuit breaker triggered!');
+        }
+    }
+    async getTask(id: number){
+        return this.taskModel.findByPk(id);
+    }
     private async createZip(files: string[], outputDir: string): Promise<string> {
         const zipPath = path.join(outputDir, 'screenshots.zip');
         const output = fs.createWriteStream(zipPath);
-        const archive = archiver('zip', {
-            zlib: { level: 9 }, // Максимальное сжатие
-        });
+        const archive = archiver('zip', { zlib: { level: 9 } });
 
         return new Promise((resolve, reject) => {
             output.on('close', () => resolve(zipPath));
-            archive.on('warning', err => console.warn(err));
             archive.on('error', reject);
-
             archive.pipe(output);
 
             files.forEach(file => {
@@ -197,6 +347,7 @@ export class TaskService {
             archive.finalize();
         });
     }
+
     private async uploadToS3(filePath: string): Promise<string> {
         const fileBuffer = await fs.promises.readFile(filePath);
         const key = `${uuidv4()}_${Date.now()}.zip`;
@@ -209,17 +360,11 @@ export class TaskService {
         });
 
         try {
-            const response = await this.s3Client.send(uploadCommand);
-            console.log('S3 upload success:', response);
+            await this.s3Client.send(uploadCommand);
             return key;
         } catch (error) {
-            console.error('S3 upload error:', {
-                statusCode: error.$metadata?.httpStatusCode,
-                message: error.message,
-                rawResponse: error.$response?.body?.toString(),
-                errorDetails: error,
-            });
-            throw new Error('Failed to upload to S3. Check server logs for details.');
+            console.error('S3 upload error:', error);
+            throw new Error('Failed to upload to S3');
         }
     }
 }
