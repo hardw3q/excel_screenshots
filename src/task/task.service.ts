@@ -53,7 +53,7 @@ export class TaskService {
             status: 'processing',
             processedAt: new Date(),
         });
-        console.log(task)
+        console.log(task);
         try {
             const tempDir = path.join(__dirname, 'temp', task.id.toString());
             await mkdir(tempDir, { recursive: true });
@@ -157,13 +157,10 @@ export class TaskService {
 
                     const screenshotPath = await this.takeScreenshot(page, outputDir, item.url, screenshots.length);
                     screenshots.push(screenshotPath);
-                    // console.log(task.completed)
-                    // if(!task.completed){
-                    //     task.completed = 0;
-                    // }
+
                     await this.taskModel.update({
                         completed: screenshots.length,
-                    }, {where:{id: task.id} });
+                    }, { where: { id: task.id } });
 
                     this.resetCircuitBreaker();
                     item.timeout = INITIAL_TIMEOUT;
@@ -185,13 +182,12 @@ export class TaskService {
 
             return screenshots;
         } finally {
-            // @ts-ignore
+            //@ts-ignore
             if (browser) {
                 await browser.close();
             }
         }
     }
-
 
     private async launchBrowser(): Promise<puppeteer.Browser> {
         return puppeteer.launch({
@@ -216,14 +212,13 @@ export class TaskService {
     private async configurePage(page: puppeteer.Page): Promise<void> {
         await page.setViewport({ width: 1280, height: 720 });
         await page.setJavaScriptEnabled(true);
+        // Устанавливаем пользовательский агент, чтобы имитировать обычный браузер
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36');
+
         await page.setRequestInterception(true);
 
         page.on('request', (req) => {
-            if (['image', 'stylesheet', 'font'].includes(req.resourceType())) {
-                req.abort();
-            } else {
-                req.continue();
-            }
+            req.continue();
         });
     }
 
@@ -334,9 +329,11 @@ export class TaskService {
             console.error('Circuit breaker triggered!');
         }
     }
-    async getTask(id: number){
+
+    async getTask(id: number) {
         return this.taskModel.findByPk(id);
     }
+
     private async createZip(files: string[], outputDir: string): Promise<string> {
         const zipPath = path.join(outputDir, 'screenshots.zip');
         const output = fs.createWriteStream(zipPath);
