@@ -40,6 +40,7 @@
           <tr>
             <th>ID</th>
             <th>Статус</th>
+            <th>Прогресс</th>
             <th>Выполнено</th>
             <th>Загрузить</th>
           </tr>
@@ -49,8 +50,25 @@
             <td>{{ task.id }}</td>
             <td>
                 <span :class="statusClass(task.status)">
-                  {{ task.status }}
+                  {{ statusText(task.status) }}
                 </span>
+            </td>
+            <td>
+              <div v-if="task.status === 'processing'">
+                <div class="progress">
+                  <div
+                      class="progress-bar progress-bar-striped progress-bar-animated"
+                      :style="{ width: progressWidth(task) }"
+                  >
+                  </div>
+
+                  <span class="progress-text">
+          {{ task.completed }}/{{ task.urlsCount }} ({{ Math.round((task.completed / task.urlsCount) * 100 )}}%)
+        </span>
+                </div>
+
+              </div>
+              <span v-else>-</span>
             </td>
             <td>{{ formatDate(task.processedAt) }}</td>
             <td>
@@ -83,15 +101,19 @@ export default {
       isUploading: false,
       tasks: [],
       loading: true,
-      error: null
+      error: null,
+      pollingIntervals: {}
     };
   },
   async mounted() {
     await this.fetchTasks();
   },
+  beforeUnmount() {
+    // Очистка всех интервалов при удалении компонента
+    Object.values(this.pollingIntervals).forEach(clearInterval);
+  },
 
   methods: {
-
     onFileChange(e) {
       this.selectedFile = e.target.files[0];
     },
@@ -104,15 +126,16 @@ export default {
       formData.append('file', this.selectedFile);
 
       try {
-        const { data } = await axios.post('https://hardw3q-excel-screenshots-0022.twc1.net/tasks/upload', formData, {
+        const { data } = await axios.post('http://localhost:3000/tasks/upload', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
         });
         this.tasks.unshift(data);
+        this.startTaskPolling(data.id);
       } catch (error) {
         console.error('Upload error:', error);
-        alert('Error uploading file');
+        alert('Ошибка при загрузке файла');
       } finally {
         this.isUploading = false;
         this.selectedFile = null;
@@ -121,27 +144,57 @@ export default {
 
     async fetchTasks() {
       try {
-        const { data } = await axios.get(`https://hardw3q-excel-screenshots-0022.twc1.net/tasks`);
+        const { data } = await axios.get(`http://localhost:3000/tasks`);
         this.tasks = data;
-        console.log(data)
+        // Запускаем опрос для активных задач
+        data.forEach(task => {
+          if (task.status === 'processing') {
+            this.startTaskPolling(task.id);
+          }
+        });
       } catch (error) {
         console.error('Error fetching tasks:', error);
-        this.error = 'Failed to load tasks';
+        this.error = 'Ошибка загрузки задач';
       } finally {
         this.loading = false;
       }
     },
 
-    // async downloadFile(key) {
-    //   try {
-    //     const { data } = await axios.get(`/tasks/${key}`);
-    //     console.log(data)
-    //     window.location.href = data.url;
-    //   } catch (error) {
-    //     console.error('Download error:', error);
-    //     alert('Error generating download link');
-    //   }
-    // },
+    startTaskPolling(taskId) {
+      if (this.pollingIntervals[taskId]) return;
+
+      this.pollingIntervals[taskId] = setInterval(async () => {
+        try {
+          const { data } = await axios.get(`http://localhost:3000/tasks/byId/${taskId}`);
+          const index = this.tasks.findIndex(t => t.id === taskId);
+          if (index !== -1) {
+            this.tasks.splice(index, 1, data);
+          }
+
+          // Останавливаем опрос если задача завершена
+          if (data.status !== 'processing') {
+            clearInterval(this.pollingIntervals[taskId]);
+            delete this.pollingIntervals[taskId];
+          }
+        } catch (error) {
+          console.error('Polling error:', error);
+        }
+      }, 3000); // Опрос каждые 3 секунды
+    },
+
+    progressWidth(task) {
+      if (!task.urlsCount || task.urlsCount === 0) return '0%';
+      const progress = (task.completed / task.urlsCount) * 100;
+      return `${Math.min(progress, 100)}%`;
+    },
+
+    statusText(status) {
+      return {
+        'processing': 'В процессе',
+        'completed': 'Завершено',
+        'failed': 'Ошибка'
+      }[status];
+    },
 
     statusClass(status) {
       return {
@@ -174,8 +227,14 @@ export default {
   box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
-.spinner-border {
-  display: inline-block;
+.progress {
+  height: 25px;
+  width: 200px;
+}
+
+.progress-bar {
+  font-size: 0.9em;
+  line-height: 25px;
 }
 
 .table {
@@ -184,5 +243,13 @@ export default {
 
 .btn:disabled {
   cursor: not-allowed;
+}
+.progress-text {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: black;
+  font-weight: bold;
+  text-shadow: 0 0 2px white;
 }
 </style>
