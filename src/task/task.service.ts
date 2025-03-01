@@ -53,7 +53,7 @@ export class TaskService {
             status: 'processing',
             processedAt: new Date(),
         });
-
+        console.log(task)
         try {
             const tempDir = path.join(__dirname, 'temp', task.id.toString());
             await mkdir(tempDir, { recursive: true });
@@ -157,7 +157,14 @@ export class TaskService {
 
                     const screenshotPath = await this.takeScreenshot(page, outputDir, item.url, screenshots.length);
                     screenshots.push(screenshotPath);
-                    await task.increment('completed');
+                    // console.log(task.completed)
+                    // if(!task.completed){
+                    //     task.completed = 0;
+                    // }
+                    await this.taskModel.update({
+                        completed: screenshots.length,
+                    }, {where:{id: task.id} });
+
                     this.resetCircuitBreaker();
                     item.timeout = INITIAL_TIMEOUT;
                     await this.randomDelay(BASE_DELAY, JITTER);
