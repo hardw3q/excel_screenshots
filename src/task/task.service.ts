@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
 import { URL } from 'url';
+import * as process from "process";
 
 const mkdir = promisify(fs.mkdir);
 const rm = promisify(fs.rm);
@@ -125,11 +126,11 @@ export class TaskService {
     }
 
     private async createScreenshots(urls: string[], outputDir: string, task: Task): Promise<string[]> {
-        const MAX_ATTEMPTS = 3;
-        const INITIAL_TIMEOUT = 30000;
-        const TIMEOUT_MULTIPLIER = 2;
-        const BASE_DELAY = 2000;
-        const JITTER = 3000;
+        const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS) || 3 ;
+        const INITIAL_TIMEOUT = Number(process.env.INITIAL_TIMEOUT) || 30000;
+        const TIMEOUT_MULTIPLIER = Number(process.env.TIMEOUT_MULTIPLIER) || 2;
+        const BASE_DELAY = Number(process.env.BASE_DELAY) || 2000;
+        const JITTER = Number(process.env.JITTER) || 3000;
 
         let browser: puppeteer.Browser;
         const screenshots: string[] = [];
