@@ -102,7 +102,8 @@ export default {
       tasks: [],
       loading: true,
       error: null,
-      pollingIntervals: {}
+      pollingIntervals: {},
+      backendHost:"https://hardw3q-excel-screenshots-0022.twc1.net"
     };
   },
   async mounted() {
@@ -126,7 +127,7 @@ export default {
       formData.append('file', this.selectedFile);
 
       try {
-        const { data } = await axios.post('https://hardw3q-excel-screenshots-0022.twc1.net/tasks/upload', formData, {
+        const { data } = await axios.post(`${this.backendHost}/tasks/upload`, formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
@@ -144,7 +145,7 @@ export default {
 
     async fetchTasks() {
       try {
-        const { data } = await axios.get(`https://hardw3q-excel-screenshots-0022.twc1.net/tasks`);
+        const { data } = await axios.get(`${this.backendHost}/tasks`);
         this.tasks = data;
         // Запускаем опрос для активных задач
         data.forEach(task => {
@@ -165,7 +166,7 @@ export default {
 
       this.pollingIntervals[taskId] = setInterval(async () => {
         try {
-          const { data } = await axios.get(`http://localhost:3000/tasks/byId/${taskId}`);
+          const { data } = await axios.get(`${this.backendHost}/tasks/byId/${taskId}`);
           const index = this.tasks.findIndex(t => t.id === taskId);
           if (index !== -1) {
             this.tasks.splice(index, 1, data);
