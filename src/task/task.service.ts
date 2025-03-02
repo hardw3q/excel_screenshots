@@ -10,14 +10,8 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { InjectModel } from '@nestjs/sequelize';
 import { Task } from './task.model';
-import * as fs from 'fs';
-import * as path from 'path';
-import { promisify } from 'util';
 import { URL } from 'url';
-import * as process from "process";
-
-const mkdir = promisify(fs.mkdir);
-const rm = promisify(fs.rm);
+import * as process from 'process';
 
 @Injectable()
 export class TaskService {
@@ -56,22 +50,28 @@ export class TaskService {
         });
         console.log(task);
         try {
-            const tempDir = path.join(__dirname, 'temp', task.id.toString());
-            await mkdir(tempDir, { recursive: true });
-
             const urls = await this.readUrlsFromExcel(file.buffer);
             await task.update({ urlsCount: urls.length });
-            const screenshots = await this.createScreenshots(urls, tempDir, task);
-            const zipPath = await this.createZip(screenshots, tempDir);
-            const s3Key = await this.uploadToS3(zipPath);
+
+            // Получаем S3-ключи для каждого скриншота
+            const screenshotKeys = await this.createScreenshots(urls, task);
+
+            // Создаём архив, извлекая изображения из S3
+            const zipBuffer = await this.createZipFromS3(screenshotKeys);
+
+            // Загружаем архив в S3
+            const zipS3Key = await this.uploadBufferToS3(
+                zipBuffer,
+                `${uuidv4()}_${Date.now()}.zip`,
+                'application/zip'
+            );
 
             await task.update({
                 status: 'completed',
-                s3Key,
+                s3Key: zipS3Key,
                 processedAt: new Date(),
             });
 
-            await rm(tempDir, { recursive: true });
             return task;
         } catch (error) {
             await task.update({ status: 'failed' });
@@ -125,15 +125,15 @@ export class TaskService {
         }
     }
 
-    private async createScreenshots(urls: string[], outputDir: string, task: Task): Promise<string[]> {
-        const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS) || 3 ;
+    private async createScreenshots(urls: string[], task: Task): Promise<string[]> {
+        const MAX_ATTEMPTS = Number(process.env.MAX_ATTEMPTS) || 3;
         const INITIAL_TIMEOUT = Number(process.env.INITIAL_TIMEOUT) || 30000;
         const TIMEOUT_MULTIPLIER = Number(process.env.TIMEOUT_MULTIPLIER) || 2;
         const BASE_DELAY = Number(process.env.BASE_DELAY) || 2000;
         const JITTER = Number(process.env.JITTER) || 3000;
 
         let browser: puppeteer.Browser;
-        const screenshots: string[] = [];
+        const screenshotKeys: string[] = [];
 
         try {
             browser = await this.launchBrowser();
@@ -156,17 +156,18 @@ export class TaskService {
                     const response = await this.navigatePage(page, item.url, item.timeout);
                     this.validateResponse(response);
 
-                    const screenshotPath = await this.takeScreenshot(page, outputDir, item.url, screenshots.length);
-                    screenshots.push(screenshotPath);
+                    // Захватываем скриншот и сразу загружаем его в S3
+                    const s3Key = await this.takeScreenshot(page, item.url, screenshotKeys.length);
+                    screenshotKeys.push(s3Key);
 
-                    await this.taskModel.update({
-                        completed: screenshots.length,
-                    }, { where: { id: task.id } });
+                    await this.taskModel.update(
+                        { completed: screenshotKeys.length },
+                        { where: { id: task.id } }
+                    );
 
                     this.resetCircuitBreaker();
                     item.timeout = INITIAL_TIMEOUT;
-                    await this.randomDelay(BASE_DELAY, JITTER);
-
+                    await new Promise(resolve => setTimeout(resolve, BASE_DELAY + Math.random() * JITTER));
                 } catch (error) {
                     await this.handleError(error, item, queue, MAX_ATTEMPTS, TIMEOUT_MULTIPLIER);
                     this.updateCircuitBreaker();
@@ -181,7 +182,7 @@ export class TaskService {
                 }
             }
 
-            return screenshots;
+            return screenshotKeys;
         } finally {
             //@ts-ignore
             if (browser) {
@@ -213,11 +214,10 @@ export class TaskService {
     private async configurePage(page: puppeteer.Page): Promise<void> {
         await page.setViewport({ width: 1280, height: 720 });
         await page.setJavaScriptEnabled(true);
-        // Устанавливаем пользовательский агент, чтобы имитировать обычный браузер
+        // Устанавливаем пользовательский агент для имитации обычного браузера
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36');
-
+        // Разрешаем загрузку всех ресурсов
         await page.setRequestInterception(true);
-
         page.on('request', (req) => {
             req.continue();
         });
@@ -236,24 +236,20 @@ export class TaskService {
         }
     }
 
-    private async takeScreenshot(
-        page: puppeteer.Page,
-        outputDir: string,
-        url: string,
-        index: number
-    ): Promise<string> {
+    /**
+     * Захватывает скриншот, получает его buffer и сразу загружает в S3.
+     * Возвращает S3-ключ изображения.
+     */
+    private async takeScreenshot(page: puppeteer.Page, url: string, index: number): Promise<string> {
         const filename = this.generateFilename(url, index + 1);
-        const screenshotPath = path.join(outputDir, filename);
-
-        await page.screenshot({
-            path: screenshotPath,
+        const buffer = await page.screenshot({
             fullPage: true,
             type: 'png',
             captureBeyondViewport: true,
         });
-
-        console.log(`Screenshot saved: ${screenshotPath}`);
-        return screenshotPath;
+        const s3Key = await this.uploadBufferToS3(Buffer.from(buffer), filename, 'image/png');
+        console.log(`Screenshot uploaded to S3 with key: ${s3Key}`);
+        return s3Key;
     }
 
     private generateFilename(url: string, index: number): string {
@@ -264,6 +260,60 @@ export class TaskService {
         } catch {
             return `${index}_${Date.now()}.png`;
         }
+    }
+
+    /**
+     * Загружает Buffer в S3 по указанному ключу и возвращает его.
+     */
+    private async uploadBufferToS3(buffer: Buffer, key: string, contentType: string): Promise<string> {
+        const uploadCommand = new PutObjectCommand({
+            Bucket: process.env.S3_BUCKET!,
+            Key: key,
+            Body: buffer,
+            ContentType: contentType,
+        });
+
+        try {
+            await this.s3Client.send(uploadCommand);
+            return key;
+        } catch (error) {
+            console.error('S3 upload error:', error);
+            throw new Error('Failed to upload to S3');
+        }
+    }
+
+    /**
+     * Извлекает из S3 изображения по их ключам, добавляет их в архив (zip)
+     * и возвращает архив в виде Buffer.
+     */
+    private async createZipFromS3(s3Keys: string[]): Promise<Buffer> {
+        return new Promise(async (resolve, reject) => {
+            const archive = archiver('zip', { zlib: { level: 9 } });
+            const buffers: Buffer[] = [];
+            archive.on('data', data => buffers.push(data));
+            archive.on('error', reject);
+            archive.on('end', () => {
+                resolve(Buffer.concat(buffers));
+            });
+
+            // Для каждого S3-ключа получаем объект и добавляем его в архив
+            for (const key of s3Keys) {
+                try {
+                    const command = new GetObjectCommand({
+                        Bucket: process.env.S3_BUCKET!,
+                        Key: key,
+                    });
+                    const response = await this.s3Client.send(command);
+                    // response.Body – это поток (ReadableStream)
+                    archive.append(response.Body, { name: key });
+                } catch (error) {
+                    console.error(`Error retrieving ${key} from S3:`, error);
+                    return reject(error);
+                }
+            }
+
+            archive.finalize();
+        });
     }
 
     private async handleError(
@@ -283,11 +333,6 @@ export class TaskService {
         } else {
             console.error(`Max attempts reached for: ${item.url}`);
         }
-    }
-
-    private async randomDelay(base: number, jitter: number): Promise<void> {
-        const delay = base + Math.random() * jitter;
-        await new Promise(resolve => setTimeout(resolve, delay));
     }
 
     private isFatalError(error: Error): boolean {
@@ -333,43 +378,5 @@ export class TaskService {
 
     async getTask(id: number) {
         return this.taskModel.findByPk(id);
-    }
-
-    private async createZip(files: string[], outputDir: string): Promise<string> {
-        const zipPath = path.join(outputDir, 'screenshots.zip');
-        const output = fs.createWriteStream(zipPath);
-        const archive = archiver('zip', { zlib: { level: 9 } });
-
-        return new Promise((resolve, reject) => {
-            output.on('close', () => resolve(zipPath));
-            archive.on('error', reject);
-            archive.pipe(output);
-
-            files.forEach(file => {
-                archive.file(file, { name: path.basename(file) });
-            });
-
-            archive.finalize();
-        });
-    }
-
-    private async uploadToS3(filePath: string): Promise<string> {
-        const fileBuffer = await fs.promises.readFile(filePath);
-        const key = `${uuidv4()}_${Date.now()}.zip`;
-
-        const uploadCommand = new PutObjectCommand({
-            Bucket: process.env.S3_BUCKET!,
-            Key: key,
-            Body: fileBuffer,
-            ContentType: 'application/zip',
-        });
-
-        try {
-            await this.s3Client.send(uploadCommand);
-            return key;
-        } catch (error) {
-            console.error('S3 upload error:', error);
-            throw new Error('Failed to upload to S3');
-        }
     }
 }
